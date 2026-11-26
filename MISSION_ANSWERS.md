@@ -170,6 +170,86 @@ Server: nginx
 
 **Conclusion:** Docker Compose giúp quản lý nhiều container, network, dependencies và health check trong cùng một cấu hình, đơn giản hóa việc triển khai hệ thống gồm nhiều dịch vụ.
 
+## Part 3: Cloud Deployment
+
+### Exercise 3.1: Railway deployment
+
+Đã cài đặt Railway CLI và chuẩn bị cấu hình triển khai trong `06-lab-complete/railway.toml`.
+
+Cấu hình sử dụng Dockerfile builder, healthcheck path `/health` và restart policy khi ứng dụng gặp lỗi.
+
+Tuy nhiên, tài khoản Railway đã hết thời gian dùng thử:
+
+```text
+Your trial has expired. Please select a plan to continue using Railway.
+```
+
+Do đó, lựa chọn Render làm nền tảng triển khai chính theo yêu cầu của CP6.
+
+### Exercise 3.2: Render deployment
+
+- Platform: Render.
+- Deployment method: GitHub Blueprint.
+- Public URL: https://day14-production-agent-u2m3.onrender.com
+- Source directory: `06-lab-complete/`.
+- Configuration: `06-lab-complete/render.yaml`.
+- Region: Singapore.
+- Services: Docker Web Service và Key Value (Redis).
+- Plan: Free.
+
+Agent được triển khai bằng Dockerfile đã hoàn thiện ở Part 6. Redis được tạo trên Render và kết nối với Agent thông qua biến môi trường REDIS_URL.
+
+API Key được Render tự động tạo bằng `generateValue: true`, không hardcode trong source code.
+
+#### Verification
+
+| Test | Expected HTTP status |
+|---|---|
+| GET /health | 200 |
+| GET /ready | 200 |
+| POST /ask without API Key | 401 |
+| POST /ask with API Key | 200 |
+
+Actual test evidence: [Test results](screenshots/test.png).
+
+#### Screenshots
+
+- [Deployment dashboard](screenshots/dashboard.png)
+- [Service running](screenshots/running.png)
+- [Test results](screenshots/test.png)
+
+Chi tiết cấu hình và lệnh kiểm thử được ghi trong [DEPLOYMENT.md](DEPLOYMENT.md).
+
+#### Railway vs Render
+
+| Feature | Railway | Render |
+|---|---|---|
+| Configuration file | railway.toml | render.yaml |
+| Configuration format | TOML | YAML |
+| Build configuration | builder = "DOCKERFILE" | runtime: docker |
+| Health check | healthcheckPath = "/health" | healthCheckPath: /health |
+| Redis configuration | Tạo Redis service và tham chiếu biến môi trường | Khai báo Key Value service trong Blueprint |
+| Secrets | Quản lý bằng service variables | generateValue hoặc sync: false |
+| Deployment method | Railway CLI hoặc GitHub | GitHub Blueprint |
+| Port | PORT do platform cung cấp | PORT do platform cung cấp |
+| Selected platform | Không triển khai do trial hết hạn | Đã triển khai |
+
+Railway sử dụng TOML để cấu hình quá trình build và deploy của Agent. Render sử dụng YAML Blueprint, cho phép khai báo đồng thời Web Service, Key Value service và mối liên kết giữa các biến môi trường.
+
+Cả hai nền tảng đều hỗ trợ Docker, health check và quản lý secrets bên ngoài source code. Render được chọn vì phù hợp với điều kiện tài khoản hiện tại.
+
+### Exercise 3.3: Cloud Run CI/CD Pipeline
+
+Dựa trên `cloudbuild.yaml` và `service.yaml` trong thư mục `03-cloud-deployment/production-cloud-run/`:
+
+1. Cloud Build cài đặt dependencies và chạy pytest để kiểm tra source code.
+2. Sau khi test thành công, Docker image được build và gắn tag theo COMMIT_SHA và latest.
+3. Docker image được push lên Container Registry.
+4. Image theo COMMIT_SHA được deploy lên Google Cloud Run tại region asia-southeast1.
+5. service.yaml định nghĩa autoscaling từ 1 đến 10 instances, giới hạn CPU/RAM, concurrency, health checks và secrets lấy từ Secret Manager.
+
+Cloud Run chỉ được phân tích dựa trên cấu hình được cung cấp trong repository, không triển khai thực tế lên Google Cloud.
+
 ## Part 4: API Security
 
 ### Exercise 4.1: API Key Authentication
@@ -463,6 +543,7 @@ Production AI Agent đã vượt qua toàn bộ 12 tiêu chí và 41 bài kiểm
 | CP3 — API Security | Giải thích API Key, JWT, Sliding Window Rate Limiting và Cost Guard; cung cấp các lệnh kiểm thử và phương án thiết kế Cost Guard bằng Redis. | Tự kiểm thử API Key với HTTP 401, 403 và 200; JWT trả 200; Rate Limiting ghi nhận 9 request thành công và 11 request bị giới hạn trong vòng lặp 20 request. Phương án Cost Guard Redis chưa được triển khai ở checkpoint này. |
 | CP4 — Scaling & Reliability | Giải thích Health Check, Readiness, Graceful Shutdown, Stateless Architecture, Redis và Nginx Load Balancing. Hướng dẫn chạy và phân tích kết quả test. | Tự kiểm thử health/readiness, gửi SIGTERM, khởi chạy 3 Agent instances và chạy test_stateless.py. Kết quả 5/5 request thành công trên 3 instances, giữ đầy đủ 10 messages trong conversation history. |
 | CP5 — Final Project | Sử dụng ChatGPT để phân tích bộ khung, đề xuất và hỗ trợ viết code cho config, health/readiness, Redis Client, API Key Authentication, Redis Sliding Window Rate Limiting, Cost Guard, JSON Logging, Graceful Shutdown, Dockerfile, Docker Compose và Railway configuration. Hỗ trợ xử lý lỗi Python 3.14 không tương thích với pydantic-core bằng môi trường Python 3.11. | Tự cập nhật source code, chạy kiểm thử thủ công và script chấm trên WSL. Kết quả cuối: PASS 12/12, 41/41 checks passed, Docker image 56 MB, Docker shutdown 0.6 giây, exit code 0. |
+| CP6 — Cloud Deployment | Sử dụng ChatGPT để hướng dẫn cài đặt Railway CLI, xử lý vấn đề Railway trial hết hạn, xây dựng Render Blueprint, cấu hình Redis và API Key, hướng dẫn kiểm thử public URL, so sánh Railway với Render và phân tích Cloud Run CI/CD pipeline. | Tự triển khai Agent lên Render, thiết lập Redis và environment variables, thực hiện kiểm thử API. Kết quả và bằng chứng được lưu trong DEPLOYMENT.md và thư mục screenshots/. |
 | CP7 — Benchmark Local | Sử dụng ChatGPT để hướng dẫn chạy load test tại 4 mức concurrency, thử nghiệm 3 mức MOCK_SLOW_RATE, phân tích kết quả JSON, so sánh Agent v1 và v2, xác định hai tài liệu còn thiếu trong Knowledge Base và giải thích cơ chế Quality Gate trong CI/CD. | Tự thực hiện 7 bài load test, chạy eval hai phiên bản, bổ sung Knowledge Base, chạy lại eval đạt 23/23 câu đúng và 0 regression. Regression Test trên v1 phát hiện 20 regression và trả exit code 1. |
 
 ### AI Usage Reflection
