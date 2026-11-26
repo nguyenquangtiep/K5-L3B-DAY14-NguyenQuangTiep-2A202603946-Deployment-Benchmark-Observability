@@ -263,3 +263,135 @@ Bản demo sử dụng ngân sách 1 USD/ngày cho mỗi user, 10 USD/ngày cho 
 6. Thiết lập expiration để quản lý dữ liệu ngân sách theo tháng.
 
 **Conclusion:** Rate Limiting kiểm soát số lượng request trong một khoảng thời gian, còn Cost Guard kiểm soát tổng chi phí sử dụng LLM. Cần kết hợp cả hai cơ chế để bảo vệ hệ thống và ngân sách.
+
+## Part 5: Scaling & Reliability
+
+### Exercise 5.1: Health checks
+
+| Endpoint | Purpose | Actual result |
+|---|---|---|
+| GET /health | Kiểm tra process còn hoạt động hay không | 200 OK |
+| GET /ready | Kiểm tra Agent đã sẵn sàng nhận request hay chưa | 200 OK |
+
+Health check result:
+
+```json
+{"status":"ok","uptime_seconds":7.9,"version":"1.0.0","environment":"development","timestamp":"2026-11-26T08:10:25.676998+00:00","checks":{"memory":{"status":"ok","used_percent":12.7}}}
+```
+
+Readiness check result:
+
+```json
+{"ready":true,"in_flight_requests":1}
+```
+
+**Explanation:** Liveness xác định process còn hoạt động, trong khi readiness xác định Agent đã sẵn sàng phục vụ request. Một Agent có thể còn sống nhưng chưa sẵn sàng khi đang khởi động hoặc mất kết nối với dependency.
+
+### Exercise 5.2: Graceful shutdown
+
+Test command:
+
+```bash
+kill -TERM 5302
+```
+
+Actual result:
+
+```text
+INFO: Shutting down
+INFO: Waiting for application shutdown.
+INFO Graceful shutdown initiated...
+INFO Shutdown complete
+INFO: Application shutdown complete.
+INFO: Finished server process [5302]
+INFO Received signal 15 — uvicorn will handle graceful shutdown
+```
+
+**Observation:** Agent tiếp nhận SIGTERM và thực hiện shutdown có kiểm soát. Thí nghiệm xác nhận lifecycle shutdown hoạt động, chưa kiểm chứng riêng trường hợp request đang xử lý khi nhận SIGTERM.
+
+### Exercise 5.3: Stateless design
+
+Khi lưu conversation history trong RAM, mỗi instance có trạng thái riêng. Nếu request tiếp theo được chuyển đến instance khác, Agent có thể mất ngữ cảnh hội thoại.
+
+Sử dụng Redis làm nơi lưu trữ trạng thái dùng chung cho phép các instance truy cập cùng một session và conversation history.
+
+### Exercise 5.4: Load balancing
+
+Docker Compose command:
+
+```bash
+docker compose -p k5-day14-scaling up -d --build --scale agent=3
+```
+
+Actual services:
+
+| Service | Instances | Status |
+|---|---|---|
+| Agent | 3 | Up (healthy) |
+| Redis | 1 | Up (healthy) |
+| Nginx | 1 | Up |
+
+Nginx tiếp nhận request tại localhost:8080 và chuyển tiếp đến các Agent instance thông qua mạng nội bộ Docker.
+
+### Exercise 5.5: Test stateless
+
+Test command:
+
+```bash
+python test_stateless.py
+```
+
+Actual request distribution:
+
+| Request | Instance | Result |
+|---|---|---|
+| 1 | instance-4cc0cb | Success |
+| 2 | instance-6fd0a9 | Success |
+| 3 | instance-207b3e | Success |
+| 4 | instance-4cc0cb | Success |
+| 5 | instance-6fd0a9 | Success |
+
+Actual summary:
+
+```text
+Total requests: 5
+Instances used: {'instance-4cc0cb', 'instance-6fd0a9', 'instance-207b3e'}
+All requests served despite different instances!
+
+Conversation History
+Total messages: 10
+
+Session history preserved across all instances via Redis!
+```
+
+**Observation:**
+
+- 5/5 requests được xử lý thành công.
+- Cả 3 Agent instance đều tham gia xử lý request.
+- Conversation history giữ đầy đủ 10 messages, gồm 5 câu hỏi và 5 câu trả lời.
+- Redis cho phép chia sẻ session state giữa các instance.
+- Thí nghiệm chưa thực hiện việc tắt một instance trong khi xử lý request.
+
+**Conclusion:** Stateless architecture kết hợp Redis và Nginx giúp hệ thống hỗ trợ nhiều instance, phân phối request và duy trì trạng thái hội thoại dùng chung.
+
+## AI Usage Log
+
+**AI tool:** ChatGPT
+
+| Checkpoint | Nội dung sử dụng AI | Kết quả và kiểm chứng |
+|---|---|---|
+| CP0 — Setup | Hướng dẫn thiết lập WSL, Python virtual environment, khắc phục lỗi thiếu ensurepip và kiểm tra môi trường Docker. | Tự thực hiện các lệnh cài đặt và kiểm tra môi trường trên máy local. |
+| CP1 — Localhost vs Production | Giải thích sự khác biệt giữa development và production, hướng dẫn kiểm thử API, phân tích kết quả và hỗ trợ viết báo cáo. | Tự chạy Agent, kiểm thử các endpoint bằng curl và ghi nhận kết quả thực tế. |
+| CP1 — Git troubleshooting | Phân tích lỗi khác biệt ký tự xuống dòng LF/CRLF giữa Windows và WSL; hướng dẫn cấu hình Git và xác thực GitHub. | Kiểm tra git diff, git status và thực hiện commit, push. |
+| CP2 — Docker Containerization | Giải thích Dockerfile, Docker layer cache, multi-stage build, Docker Compose và hỗ trợ xử lý lỗi Docker Hub 429. | Tự build hai Docker image, kiểm thử API và khởi chạy Docker Compose gồm Agent, Redis, Qdrant và Nginx. |
+| CP2 — Image comparison | Hỗ trợ tính tỷ lệ giảm kích thước Docker image và phân tích kiến trúc Docker Compose. | Sử dụng số liệu thực tế: Develop 1.67 GB, Production 240 MB, giảm khoảng 85.63%. |
+| CP3 — API Security | Giải thích API Key, JWT, Sliding Window Rate Limiting và Cost Guard; cung cấp các lệnh kiểm thử và phương án thiết kế Cost Guard bằng Redis. | Tự kiểm thử API Key với HTTP 401, 403 và 200; JWT trả 200; Rate Limiting ghi nhận 9 request thành công và 11 request bị giới hạn trong vòng lặp 20 request. Phương án Cost Guard Redis chưa được triển khai ở checkpoint này. |
+| CP4 — Scaling & Reliability | Giải thích Health Check, Readiness, Graceful Shutdown, Stateless Architecture, Redis và Nginx Load Balancing. Hướng dẫn chạy và phân tích kết quả test. | Tự kiểm thử health/readiness, gửi SIGTERM, khởi chạy 3 Agent instances và chạy test_stateless.py. Kết quả 5/5 request thành công trên 3 instances, giữ đầy đủ 10 messages trong conversation history. |
+
+### AI Usage Reflection
+
+- AI được sử dụng để hỗ trợ đọc hiểu tài liệu, phân tích source code, hướng dẫn thực hành, xử lý lỗi và tổng hợp báo cáo.
+- Các kết quả thực nghiệm được lấy từ terminal và môi trường chạy thực tế, không sử dụng số liệu giả định làm kết quả kiểm thử.
+- Các nội dung do AI đề xuất được đối chiếu với source code, yêu cầu của bài Lab và kết quả thực tế.
+- Các giới hạn chưa được kiểm thử được ghi nhận rõ ràng trong báo cáo.
+- Không đưa API Key, Personal Access Token, JWT Token hoặc thông tin xác thực cá nhân vào repository.
