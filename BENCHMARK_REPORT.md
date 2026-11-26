@@ -89,15 +89,35 @@ Evidence: `reports/eval_v1.json`, `reports/eval_v2.json`, `reports/eval_v2_fixed
 
 Stack gồm Agent, Nginx, Prometheus, Grafana, Jaeger và Locust. Agent chạy 1 worker/container để tránh sai lệch metric trong bộ nhớ từng process. Prometheus scrape metric, Grafana hiển thị dashboard, Jaeger nhận OTLP traces; JSON log liên kết theo trace_id. Khi khởi chạy, Dockerfile ban đầu bị lỗi import uvicorn do đường dẫn user-site không khớp home directory. Đã sửa cài dependencies vào /install ở builder và copy sang /usr/local ở runtime; giữ multi-stage, non-root, healthcheck và một worker. Sau khi sửa, Agent healthy và `/health` qua Nginx trả HTTP 200. Xung đột port 8080 cũng đã được xử lý.
 
+**Exercise 7.4 — Observability Stack Questions**
+
+1. **p95 và average latency khác nhau như thế nào?**
+
+   Trong benchmark scaling với 1 instance, endpoint /ask có average latency 242.26 ms và p95 250 ms. Với 3 instances, average latency là 236.76 ms và p95 là 260 ms. Ảnh Grafana khi có tải ghi nhận p95 là 291.51 ms, error rate 0.21% và traffic 8.6 requests/s. Average chính xác tại thời điểm chụp ảnh chưa được ghi lại. Khoảng cách giữa average và các percentile cao phản ánh tail latency; một nhóm request chậm có thể ảnh hưởng trải nghiệm người dùng dù average vẫn thấp.
+
+2. **Nginx có phân phối traffic đều giữa các instance không?**
+
+   Panel Requests/s theo instance trong thí nghiệm E cho thấy ở giai đoạn có 3 instances, mỗi instance xử lý khoảng 6 requests/s. Traffic được phân phối tương đối đồng đều. Khi chỉ còn 2 instances hoạt động trong giai đoạn trước đó, mỗi instance xử lý khoảng 9 requests/s.
+
+3. **Vì sao input tokens/s có thể lớn hơn output tokens/s?**
+
+   Input tokens bao gồm câu hỏi, system prompt và context được retrieval bổ sung. Vì vậy input có thể lớn hơn output. Trong slow trace thực tế, input là 76 tokens và output là 39 tokens. Tuy nhiên, tỷ lệ này phụ thuộc độ dài câu trả lời; dashboard tổng hợp không phải lúc nào cũng có input tokens/s lớn hơn output tokens/s.
+
+4. **Vì sao Nginx chặn endpoint /metrics?**
+
+   Cấu hình nginx/nginx.conf định nghĩa location = /metrics trả về HTTP 404. Điều này ngăn truy cập công khai vào metrics nội bộ, tránh tiết lộ thông tin về traffic, chi phí và tình trạng hệ thống. Prometheus vẫn có thể scrape trực tiếp Agent thông qua Docker network. HTTP 404 là kết quả theo cấu hình; chưa lưu riêng output curl của endpoint này.
+
 ### 4.2 Thí nghiệm "phá hệ thống"
 
-| # | Thay đổi | Alert nào firing | Thời gian từ lúc đổi → firing | Panel nào phản ánh rõ nhất |
+| # | Thay đổi | Alert nào firing | Thời gian từ lúc đổi → quan sát firing | Panel nào phản ánh rõ nhất |
 |---|---|---|---|---|
-| A | `MOCK_ERROR_RATE=0.2` | AgentHighErrorRate | Chưa ghi chính xác; rule `for: 1m` | Error rate 20.61% (Grafana), 19.45% (Prometheus); p95 290.28 ms |
-| B | `MOCK_SLOW_RATE=0.3` (giữ error rate 0.2) | AgentHighLatencyP95 và AgentHighErrorRate | Chưa ghi chính xác; latency rule `for: 2m` | p95 1.90 s, error rate 19.37%, 15.1 req/s |
-| C | `LLM_MODEL=mock-llm-large` (khôi phục A/B) | LLMCostBurnRateHigh | Chưa điền thời gian thực đo; rule `for: 2m` | LLM cost (1h) 4.4189 USD; p95 664.19 ms, error rate 1.32% |
-| D | `docker pause` 1 instance (model mặc định) | AgentInstanceDown; LLMCostBurnRateHigh cũng đang firing | Chưa điền thời gian thực đo; instance rule `for: 30s` | Instances up 2/3, traffic 18 req/s, error rate 0.81%, p95 294.47 ms |
-| E | `AGENT_VERSION=v1` | Không có alert firing tại thời điểm quan sát | N/A | Tokens/s giảm; response xác nhận agent_version=v1; retrieval panel còn dữ liệu v2 |
+| A | `MOCK_ERROR_RATE=0.2` | AgentHighErrorRate | Chưa ghi chính xác | Error rate 20.61% (Grafana), 19.45% (Prometheus); p95 290.28 ms |
+| B | `MOCK_SLOW_RATE=0.3` (giữ error rate 0.2) | AgentHighLatencyP95 và AgentHighErrorRate | Chưa ghi chính xác | p95 1.90 s, error rate 19.37%, 15.1 req/s |
+| C | `LLM_MODEL=mock-llm-large` | LLMCostBurnRateHigh | 235 giây (3 phút 55 giây) | LLM cost (1h) 4.4189 USD; p95 664.19 ms |
+| D | `docker pause` 1 instance | AgentInstanceDown; LLMCostBurnRateHigh cũng đang firing | 221 giây (3 phút 41 giây) | Instances up 2/3, traffic 18 req/s, error rate 0.81%, p95 294.47 ms |
+| E | `AGENT_VERSION=v1` | Không có alert firing | N/A | Tokens/s giảm; response xác nhận agent_version=v1 |
+
+Thời gian thực nghiệm C và D được tính từ thời điểm bắt đầu thay đổi cấu hình đến thời điểm quan sát thấy alert ở trạng thái firing. Đây không nhất thiết là thời điểm chính xác alert vừa chuyển sang firing, do có độ trễ quan sát thủ công.
 
 Các giá trị `for` là thời gian duy trì điều kiện của rule, không phải số đo thời gian thực tế từ lúc đổi cấu hình. A hiển thị Active Since 4m 28.049s khi chụp, không dùng thay thế thời gian tới firing. B giữ lỗi A để kiểm chứng hai alert đồng thời, nên không phải hai thí nghiệm độc lập. C sử dụng chi phí mô phỏng; cost alert tính `rate` trên 5 phút quy đổi USD/giờ, khác tổng cost trong cửa sổ 1 giờ. Cost alert từng firing ở model small và còn firing trong D, có thể liên quan mức tải hoặc cửa sổ metric lịch sử. D cho thấy hai Agent vẫn phục vụ request; chưa có bằng chứng HTTP 504 từ Locust, và lỗi tại Nginx không nhất thiết xuất hiện trong metric Agent.
 
