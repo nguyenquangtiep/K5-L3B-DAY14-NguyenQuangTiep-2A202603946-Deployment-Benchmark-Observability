@@ -169,3 +169,97 @@ Server: nginx
 **Observation:** Tất cả 4 service được khởi chạy thành công bằng Docker Compose. Nginx tiếp nhận request từ client và chuyển tiếp đến Agent thông qua mạng nội bộ Docker. Cả endpoint /health và /ask đều trả về HTTP 200 OK.
 
 **Conclusion:** Docker Compose giúp quản lý nhiều container, network, dependencies và health check trong cùng một cấu hình, đơn giản hóa việc triển khai hệ thống gồm nhiều dịch vụ.
+
+## Part 4: API Security
+
+### Exercise 4.1: API Key Authentication
+
+**Implementation analysis:**
+
+- API Key được kiểm tra tại hàm `verify_api_key()` trong `develop/app.py`.
+- Thiếu API Key trả về HTTP 401.
+- API Key không hợp lệ trả về HTTP 403.
+- API Key hợp lệ cho phép request tiếp tục.
+- Có thể rotate key bằng cách thay đổi biến môi trường `AGENT_API_KEY`, khởi động lại service và cập nhật key phía client.
+
+**Actual test results:**
+
+| Test case | Expected | Actual |
+|---|---|---|
+| Missing API Key | 401 | 401 Unauthorized |
+| Invalid API Key | 403 | 403 Forbidden |
+| Valid API Key | 200 | 200 OK |
+
+Missing API Key response:
+
+```text
+HTTP/1.1 401 Unauthorized
+{"detail":"Missing API key. Include header: X-API-Key: <your-key>"}
+```
+
+Invalid API Key response:
+
+```text
+HTTP/1.1 403 Forbidden
+```
+
+Valid API Key response:
+
+```text
+HTTP/1.1 200 OK
+{"question":"Hello","answer":"Agent đang hoạt động tốt! (mock response) Hỏi thêm câu hỏi đi nhé."}
+```
+
+### Exercise 4.2: JWT Authentication
+
+JWT authentication flow:
+
+1. Client gửi username và password đến `POST /auth/token`.
+2. Server xác thực tài khoản và cấp JWT chứa thông tin user, role và thời hạn.
+3. Client gửi JWT qua header `Authorization: Bearer <TOKEN>`.
+4. Server kiểm tra chữ ký và thời hạn token trước khi xử lý request.
+
+**Actual result:**
+
+```text
+HTTP/1.1 200 OK
+Question: Explain JWT
+Requests remaining: 9
+```
+
+JWT token đã được ẩn để đảm bảo an toàn.
+
+### Exercise 4.3: Rate Limiting
+
+- Algorithm: Sliding Window, lưu timestamp của request bằng deque.
+- Window: 60 seconds.
+- User limit: 10 requests/minute.
+- Admin limit: 100 requests/minute.
+- Admin được áp dụng limiter riêng với ngưỡng cao hơn, không phải bỏ qua hoàn toàn rate limiting.
+- State của bản demo được lưu trong RAM.
+
+**Actual test results:**
+
+| Requests | HTTP status | Count |
+|---|---|---|
+| Request 1–9 | 200 OK | 9 |
+| Request 10–20 | 429 Too Many Requests | 11 |
+
+Trước vòng lặp đã có một request thành công từ Exercise 4.2. Vì vậy, sau 9 request thành công tiếp theo, tài khoản đạt giới hạn 10 request trong 60 giây và các request còn lại bị từ chối.
+
+### Exercise 4.4: Cost Guard
+
+Cost Guard bảo vệ ngân sách sử dụng LLM bằng cách theo dõi input tokens, output tokens và tổng chi phí.
+
+Bản demo sử dụng ngân sách 1 USD/ngày cho mỗi user, 10 USD/ngày cho toàn hệ thống và cảnh báo khi đạt 80% ngân sách. Khi vượt ngân sách cá nhân, hệ thống trả về HTTP 402. Khi vượt ngân sách toàn hệ thống, hệ thống trả về HTTP 503.
+
+**Proposed Redis implementation:**
+
+1. Tạo Redis key theo user ID và tháng, ví dụ `budget:user123:YYYY-MM`.
+2. Đọc tổng chi phí đã sử dụng.
+3. Kiểm tra tổng chi phí hiện tại cộng chi phí dự kiến có vượt ngân sách 10 USD/tháng hay không.
+4. Nếu vượt ngân sách, từ chối request.
+5. Nếu còn ngân sách, cập nhật chi phí bằng thao tác nguyên tử hoặc Redis transaction để tránh race condition khi có nhiều request đồng thời.
+6. Thiết lập expiration để quản lý dữ liệu ngân sách theo tháng.
+
+**Conclusion:** Rate Limiting kiểm soát số lượng request trong một khoảng thời gian, còn Cost Guard kiểm soát tổng chi phí sử dụng LLM. Cần kết hợp cả hai cơ chế để bảo vệ hệ thống và ngân sách.
