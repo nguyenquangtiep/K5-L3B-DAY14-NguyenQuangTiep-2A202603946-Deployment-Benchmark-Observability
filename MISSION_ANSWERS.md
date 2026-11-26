@@ -59,3 +59,113 @@ content-type: application/json
 | POST /ask | 200 OK | Agent trả lời câu hỏi Hello thành công |
 
 **Conclusion:** Phiên bản develop có thể chạy và trả lời câu hỏi, nhưng còn nhiều anti-pattern. Phiên bản production cải thiện configuration, logging, health check, readiness và lifecycle management, giúp ứng dụng phù hợp hơn với môi trường triển khai thực tế.
+
+## Part 2: Docker
+
+### Exercise 2.1: Dockerfile questions
+
+1. **Base image:** `python:3.11`, cung cấp môi trường Python và các thành phần hệ thống cần thiết để chạy ứng dụng.
+2. **Working directory:** `/app`, là thư mục làm việc bên trong container.
+3. **Why COPY requirements.txt first?** Tận dụng Docker layer cache. Khi source code thay đổi nhưng requirements.txt không đổi, Docker có thể tái sử dụng layer đã cài dependencies.
+4. **CMD vs ENTRYPOINT:** CMD cung cấp lệnh hoặc tham số mặc định có thể ghi đè khi chạy container. ENTRYPOINT xác định chương trình chính được thực thi khi container khởi động.
+
+### Exercise 2.2: Build and run
+
+Build command:
+
+```bash
+docker build -f 02-docker/develop/Dockerfile -t my-agent:develop .
+```
+
+Health check result:
+
+```text
+HTTP/1.1 200 OK
+{"status":"ok","uptime_seconds":25.7,"container":true}
+```
+
+Agent API result:
+
+```text
+HTTP/1.1 200 OK
+{"answer":"Container là cách đóng gói app để chạy ở mọi nơi. Build once, run anywhere!"}
+```
+
+**Observation:** Agent được đóng gói và chạy thành công trong Docker container. Cả health check và agent endpoint đều trả về HTTP 200 OK.
+
+### Exercise 2.3: Image size comparison
+
+Actual Docker image results:
+
+```text
+my-agent:advanced   4bd98499d2ad   240MB    57.4MB
+my-agent:develop    579f1f659cd0   1.67GB   426MB
+```
+
+- Develop: 1670 MB.
+- Production: 240 MB.
+- Difference: 85.63% reduction.
+- Saved storage: approximately 1430 MB.
+
+Calculation:
+
+`(1670 - 240) / 1670 × 100 = 85.63%`
+
+**Stage 1 — Builder:** Cài đặt dependencies và các công cụ cần thiết trong quá trình build.
+
+**Stage 2 — Runtime:** Chỉ sao chép dependencies đã cài đặt và source code cần thiết để chạy ứng dụng, sử dụng Python slim và non-root user.
+
+**Conclusion:** Multi-stage build kết hợp với slim base image giúp giảm kích thước image, loại bỏ các công cụ build không cần thiết và cải thiện tính bảo mật. Image Production có kích thước 240 MB, đáp ứng mục tiêu dưới 500 MB.
+
+### Exercise 2.4: Docker Compose stack
+
+**Architecture diagram:**
+
+```text
+Client (curl)
+     |
+     v
+Nginx (port 80)
+     |
+     v
+Agent (FastAPI, port 8000)
+     |
+     +-- Redis (port 6379)
+     |
+     +-- Qdrant (port 6333)
+```
+
+Redis và Qdrant là các dịch vụ phụ trợ được cấu hình trong Docker Compose. Agent mẫu chưa trực tiếp truy vấn chúng trong luồng xử lý /ask.
+
+**Services:**
+
+| Service | Purpose | Actual status |
+|---|---|---|
+| Agent | Xử lý câu hỏi bằng Mock LLM | Up (healthy) |
+| Nginx | Reverse proxy và chuyển tiếp request | Up |
+| Redis | Hạ tầng cache và session | Up (healthy) |
+| Qdrant | Vector database phục vụ RAG | Up (healthy) |
+
+**Test results:**
+
+Health check:
+
+```text
+HTTP/1.1 200 OK
+Server: nginx
+
+{"status":"ok","uptime_seconds":34.0,"version":"2.0.0","timestamp":"2026-11-26T07:52:30.015744"}
+```
+
+Agent API:
+
+```text
+HTTP/1.1 200 OK
+Server: nginx
+
+{"answer":"Agent đang hoạt động tốt! (mock response) Hỏi thêm câu hỏi đi nhé."}
+```
+
+**Observation:** Tất cả 4 service được khởi chạy thành công bằng Docker Compose. Nginx tiếp nhận request từ client và chuyển tiếp đến Agent thông qua mạng nội bộ Docker. Cả endpoint /health và /ask đều trả về HTTP 200 OK.
+
+**Conclusion:** Docker Compose giúp quản lý nhiều container, network, dependencies và health check trong cùng một cấu hình, đơn giản hóa việc triển khai hệ thống gồm nhiều dịch vụ.
