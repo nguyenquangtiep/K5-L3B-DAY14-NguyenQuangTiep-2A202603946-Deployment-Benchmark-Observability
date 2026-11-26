@@ -374,6 +374,81 @@ Session history preserved across all instances via Redis!
 
 **Conclusion:** Stateless architecture kết hợp Redis và Nginx giúp hệ thống hỗ trợ nhiều instance, phân phối request và duy trì trạng thái hội thoại dùng chung.
 
+## Part 6: Final Project — Production-ready AI Agent
+
+### Implementation
+
+Hoàn thiện Production AI Agent trong thư mục `06-lab-complete/`, áp dụng các kiến thức từ Part 1, Part 2, Part 4 và Part 5.
+
+| Component | Implementation |
+|---|---|
+| Configuration | Đọc cấu hình từ environment variables |
+| Health Check | GET /health trả HTTP 200 khi Agent hoạt động |
+| Readiness Check | GET /ready kiểm tra kết nối Redis |
+| Authentication | Xác thực X-API-Key, thiếu hoặc sai key trả 401 |
+| Rate Limiting | Redis Sorted Set và Lua Script, Sliding Window 60 giây |
+| Cost Guard | Theo dõi chi phí token ước tính trong Redis theo ngày UTC |
+| Structured Logging | JSON Formatter và request logging middleware |
+| Graceful Shutdown | FastAPI lifespan, Uvicorn SIGTERM handling và đóng Redis client |
+| Dockerfile | Multi-stage build, Python 3.11-slim, non-root user, healthcheck |
+| Docker Compose | Agent và Redis với shared network |
+| Docker Ignore | Loại trừ secret, virtual environment và cache |
+| Deployment Config | Railway Dockerfile builder và healthcheck path |
+
+### Production Readiness Test
+
+Test command:
+
+```bash
+python check_production_ready.py --redis-url redis://127.0.0.1:6379/1
+```
+
+Actual test results:
+
+| Criterion | Result |
+|---|---|
+| Dockerfile | PASS |
+| Docker Compose | PASS |
+| .dockerignore | PASS |
+| Health Check | PASS |
+| Readiness Check | PASS |
+| API Key Authentication | PASS |
+| Rate Limiting | PASS |
+| Cost Guard | PASS |
+| Environment Variables | PASS |
+| Structured Logging | PASS |
+| Graceful Shutdown | PASS |
+| Public URL Ready | PASS |
+
+### Actual measurements
+
+- Docker image build time: 2 seconds.
+- Docker image size: 56 MB.
+- Rate limit: HTTP 429 after 5 successful requests.
+- Redis state preserved after Agent restart.
+- Cost Guard: HTTP 402 at request 1 with the test budget.
+- Structured logging: 12 valid JSON log lines.
+- Graceful shutdown: in-flight request returned HTTP 200, process exit code 0.
+- Docker stop: exit code 0, completed in 0.6 seconds.
+
+### Final result
+
+```text
+Result: 12/12 tiêu chí đạt · 41/41 checks passed
+PASS 12/12 — PRODUCTION READY! Deploy nào!
+```
+
+### Limitations
+
+- Agent sử dụng Mock LLM, chưa gọi mô hình AI thực tế.
+- Chi phí token được ước lượng, không phải chi phí thực tế từ nhà cung cấp LLM.
+- Cost Guard kiểm tra ngân sách trước khi xử lý và ghi nhận chi phí sau khi xử lý; chưa triển khai budget reservation cho các request đồng thời.
+- Cấu hình cloud deployment đã được chuẩn bị, nhưng chưa kiểm chứng public URL ở checkpoint này.
+
+### Conclusion
+
+Production AI Agent đã vượt qua toàn bộ 12 tiêu chí và 41 bài kiểm tra thành phần. Hệ thống hỗ trợ xác thực, giới hạn request, quản lý chi phí, chia sẻ trạng thái qua Redis, health checks, structured logging và graceful shutdown. Agent sẵn sàng chuyển sang bước Cloud Deployment.
+
 ## AI Usage Log
 
 **AI tool:** ChatGPT
@@ -387,6 +462,7 @@ Session history preserved across all instances via Redis!
 | CP2 — Image comparison | Hỗ trợ tính tỷ lệ giảm kích thước Docker image và phân tích kiến trúc Docker Compose. | Sử dụng số liệu thực tế: Develop 1.67 GB, Production 240 MB, giảm khoảng 85.63%. |
 | CP3 — API Security | Giải thích API Key, JWT, Sliding Window Rate Limiting và Cost Guard; cung cấp các lệnh kiểm thử và phương án thiết kế Cost Guard bằng Redis. | Tự kiểm thử API Key với HTTP 401, 403 và 200; JWT trả 200; Rate Limiting ghi nhận 9 request thành công và 11 request bị giới hạn trong vòng lặp 20 request. Phương án Cost Guard Redis chưa được triển khai ở checkpoint này. |
 | CP4 — Scaling & Reliability | Giải thích Health Check, Readiness, Graceful Shutdown, Stateless Architecture, Redis và Nginx Load Balancing. Hướng dẫn chạy và phân tích kết quả test. | Tự kiểm thử health/readiness, gửi SIGTERM, khởi chạy 3 Agent instances và chạy test_stateless.py. Kết quả 5/5 request thành công trên 3 instances, giữ đầy đủ 10 messages trong conversation history. |
+| CP5 — Final Project | Sử dụng ChatGPT để phân tích bộ khung, đề xuất và hỗ trợ viết code cho config, health/readiness, Redis Client, API Key Authentication, Redis Sliding Window Rate Limiting, Cost Guard, JSON Logging, Graceful Shutdown, Dockerfile, Docker Compose và Railway configuration. Hỗ trợ xử lý lỗi Python 3.14 không tương thích với pydantic-core bằng môi trường Python 3.11. | Tự cập nhật source code, chạy kiểm thử thủ công và script chấm trên WSL. Kết quả cuối: PASS 12/12, 41/41 checks passed, Docker image 56 MB, Docker shutdown 0.6 giây, exit code 0. |
 
 ### AI Usage Reflection
 
